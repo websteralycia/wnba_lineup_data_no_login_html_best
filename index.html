@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WNBA Roster Architect - Local Engine</title>
+    <!-- React and Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+    </style>
+</head>
+<body class="bg-[#F8F9FA] text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // Simple SVG Icon Components (Lucide Replacements)
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const icons = {
+                search: <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />,
+                plus: <path d="M12 5v14M5 12h14" />,
+                x: <path d="M18 6L6 18M6 6l12 12" />,
+                trophy: <path d="M6 9H4.5a2.5 2.5 0 010-5H6M18 9h1.5a2.5 2.5 0 000-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22M18 2H6v7a6 6 0 0012 0V2z" />,
+                users: <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100-8 4 4 0 000 8zm14 14v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />,
+                activity: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
+                trash: <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />,
+                spreadsheet: <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M8 13h8M8 17h8M10 9h4" />,
+                layout: <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />,
+                chevronLeft: <path d="M15 18l-6-6 6-6" />,
+                chevronRight: <path d="M9 18l6-6-6-6" />,
+                filter: <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />,
+                chart: <path d="M18 20V10M12 20V4M6 20v-6" />
+            };
+
+            return (
+                <svg 
+                    width={size} 
+                    height={size} 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    className={className}
+                >
+                    {icons[name]}
+                </svg>
+            );
+        };
+
+        const SALARY_CAP = 1463000;
+        const POSITIONS = ['G', 'F', 'C', 'G-F', 'F-G', 'F-C', 'C-F'];
+        const ITEMS_PER_PAGE = 12;
+
+        const App = () => {
+            const [players, setPlayers] = useState([]);
+            const [lineup, setLineup] = useState([]);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [posFilter, setPosFilter] = useState('All');
+            const [teamFilter, setTeamFilter] = useState('All');
+            const [showImport, setShowImport] = useState(false);
+            const [csvText, setCsvText] = useState('');
+            const [currentPage, setCurrentPage] = useState(1);
+
+            const handleImport = () => {
+                try {
+                    const rows = csvText.split('\n').filter(r => r.trim() !== '');
+                    if (rows.length < 2) return;
+                    const headers = rows[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
+                    
+                    const parsedData = rows.slice(1).map((row, idx) => {
+                        const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
+                        const entry = { athlete_id: idx }; // Fallback ID
+                        headers.forEach((header, i) => {
+                            const val = values[i];
+                            let key = header;
+                            if (header === 'athlete name') key = 'player';
+                            entry[key] = isNaN(val) || val === "" ? val : parseFloat(val);
+                        });
+                        return entry;
+                    }).filter(p => p.player);
+
+                    setPlayers(parsedData);
+                    setShowImport(false);
+                    setCsvText('');
+                    setCurrentPage(1);
+                } catch (err) {
+                    console.error("Import failed:", err);
+                }
+            };
+
+            const teams = useMemo(() => {
+                const uniqueTeams = [...new Set(players.map(p => p.team).filter(Boolean))];
+                return uniqueTeams.sort();
+            }, [players]);
+
+            const lineupStats = useMemo(() => {
+                if (lineup.length === 0) return null;
+                const count = lineup.length;
+                return {
+                    totalSalary: lineup.reduce((sum, p) => sum + (p.salary_2025_num || 0), 0),
+                    avgTs: lineup.reduce((sum, p) => sum + (p.ts_pctile_pos || 0), 0) / count,
+                    avgUsage: lineup.reduce((sum, p) => sum + (p.usage_pctile_pos || 0), 0) / count,
+                    avgDef: lineup.reduce((sum, p) => sum + (p.def_efg_pctile_pos || 0), 0) / count,
+                    avgAst: lineup.reduce((sum, p) => sum + (p.ast_pctile_pos || 0), 0) / count,
+                };
+            }, [lineup]);
+
+            const filteredPlayers = useMemo(() => {
+                return players.filter(p => {
+                    const matchesSearch = p.player?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                          p.team?.toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesPos = posFilter === 'All' || p.position?.includes(posFilter);
+                    const matchesTeam = teamFilter === 'All' || p.team === teamFilter;
+                    const inLineup = lineup.find(lp => lp.athlete_id === p.athlete_id);
+                    return matchesSearch && matchesPos && matchesTeam && !inLineup;
+                });
+            }, [players, searchTerm, posFilter, teamFilter, lineup]);
+
+            const totalPages = Math.max(1, Math.ceil(filteredPlayers.length / ITEMS_PER_PAGE));
+            const paginatedPlayers = useMemo(() => {
+                const start = (currentPage - 1) * ITEMS_PER_PAGE;
+                return filteredPlayers.slice(start, start + ITEMS_PER_PAGE);
+            }, [filteredPlayers, currentPage]);
+
+            return (
+                <div className="min-h-screen">
+                    <nav className="bg-slate-950 sticky top-0 z-40 px-8 h-20 flex items-center justify-between shadow-2xl">
+                        <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center shadow-lg shadow-orange-500/20">
+                                <Icon name="trophy" size={20} className="text-white" />
+                            </div>
+                            <div>
+                                <h1 className="text-lg font-black tracking-tight uppercase leading-none text-white">Roster Architect</h1>
+                                <p className="text-[10px] text-slate-500 font-bold tracking-widest uppercase mt-1">Local Analysis Engine</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => setShowImport(true)} className="flex items-center gap-2 px-5 py-2.5 bg-white text-slate-950 rounded-lg text-[11px] font-black tracking-widest hover:bg-slate-100 transition-all">
+                                <Icon name="spreadsheet" size={14} /> IMPORT DATA
+                            </button>
+                            <button onClick={() => { if (confirm('Clear current roster?')) setLineup([]); }} className="p-2.5 text-slate-400 hover:text-white transition-colors bg-white/5 rounded-lg border border-white/10">
+                                <Icon name="trash" size={18} />
+                            </button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-[1550px] mx-auto p-8 grid grid-cols-12 gap-8">
+                        {/* List Section */}
+                        <div className="col-span-12 lg:col-span-7 space-y-6">
+                            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-100">
+                                <div className="flex flex-col gap-4 mb-8">
+                                    <div className="relative flex-1">
+                                        <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                        <input 
+                                            type="text"
+                                            placeholder="Search athletes by name or team..."
+                                            className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-12 pr-4 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-slate-950/5 font-medium"
+                                            value={searchTerm}
+                                            onChange={(e) => {setSearchTerm(e.target.value); setCurrentPage(1);}}
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <div className="flex items-center gap-2 bg-slate-50 px-4 rounded-xl border border-slate-100">
+                                            <Icon name="filter" size={14} className="text-slate-400" />
+                                            <select className="py-3 bg-transparent text-[10px] font-black uppercase tracking-wider outline-none text-slate-600" value={posFilter} onChange={(e) => setPosFilter(e.target.value)}>
+                                                <option value="All">All Positions</option>
+                                                {POSITIONS.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-slate-50 px-4 rounded-xl border border-slate-100">
+                                            <Icon name="users" size={14} className="text-slate-400" />
+                                            <select className="py-3 bg-transparent text-[10px] font-black uppercase tracking-wider outline-none text-slate-600" value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
+                                                <option value="All">All Teams</option>
+                                                {teams.map(team => <option key={team} value={team}>{team}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="overflow-x-auto min-h-[500px]">
+                                    <table className="w-full">
+                                        <thead>
+                                            <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
+                                                <th className="pb-4 text-left">Athlete Name</th>
+                                                <th className="pb-4 text-left">Pos</th>
+                                                <th className="pb-4 text-left">Salary</th>
+                                                <th className="pb-4 text-center">TS% Pctl</th>
+                                                <th className="pb-4 text-center">Def Pctl</th>
+                                                <th className="pb-4"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-50">
+                                            {paginatedPlayers.length > 0 ? paginatedPlayers.map(p => (
+                                                <tr key={p.athlete_id} className="group hover:bg-slate-50 transition-all">
+                                                    <td className="py-4">
+                                                        <div className="font-bold text-sm text-slate-900">{p.player}</div>
+                                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{p.team}</div>
+                                                    </td>
+                                                    <td className="py-4">
+                                                        <span className="text-[10px] font-black px-2 py-1 bg-slate-100 text-slate-600 rounded">
+                                                            {p.position}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4 font-mono text-xs font-bold text-slate-500">
+                                                        ${p.salary_2025_num?.toLocaleString() || '---'}
+                                                    </td>
+                                                    <td className="py-4 text-center">
+                                                        <PercentBadge value={p.ts_pctile_pos} />
+                                                    </td>
+                                                    <td className="py-4 text-center">
+                                                        <PercentBadge value={p.def_efg_pctile_pos} />
+                                                    </td>
+                                                    <td className="py-4 text-right">
+                                                        <button onClick={() => setLineup([...lineup, p])} disabled={lineup.length >= 12} className="p-2.5 bg-slate-950 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all disabled:opacity-0 hover:bg-orange-600 shadow-xl">
+                                                            <Icon name="plus" size={16} />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            )) : (
+                                                <tr>
+                                                    <td colSpan="6" className="py-24 text-center">
+                                                        <div className="bg-slate-50 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-slate-100">
+                                                            <Icon name="layout" size={24} className="text-slate-200" />
+                                                        </div>
+                                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Import CSV to begin</p>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{filteredPlayers.length} athletes</p>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => setCurrentPage(p => Math.max(1, p-1))} disabled={currentPage === 1} className="p-2 rounded-lg border border-slate-100 text-slate-400 disabled:opacity-30">
+                                            <Icon name="chevronLeft" size={18} />
+                                        </button>
+                                        <span className="text-[10px] font-black px-4">{currentPage} / {totalPages}</span>
+                                        <button onClick={() => setCurrentPage(p => Math.min(totalPages, p+1))} disabled={currentPage === totalPages} className="p-2 rounded-lg border border-slate-100 text-slate-400 disabled:opacity-30">
+                                            <Icon name="chevronRight" size={18} />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Lineup Section */}
+                        <div className="col-span-12 lg:col-span-5 space-y-6">
+                            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-100">
+                                <div className="flex justify-between items-center mb-8">
+                                    <div className="flex items-center gap-2.5">
+                                        <Icon name="users" className="text-slate-400" />
+                                        <h2 className="text-xs font-black uppercase tracking-widest text-slate-900">Active Lineup</h2>
+                                    </div>
+                                    <span className={`text-[10px] font-black px-3 py-1.5 rounded-lg border ${lineup.length === 12 ? 'bg-orange-50 text-orange-600 border-orange-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
+                                        {lineup.length}/12
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    {lineup.map(p => (
+                                        <div key={p.athlete_id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 group">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded bg-white border border-slate-200 flex items-center justify-center font-black text-slate-400 text-[9px]">
+                                                    {p.position?.split('-')[0]}
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-[13px] text-slate-900 leading-tight">{p.player}</div>
+                                                    <div className="flex gap-2">
+                                                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">{p.team}</span>
+                                                        <span className="text-[8px] font-mono font-bold text-slate-400">${p.salary_2025_num?.toLocaleString()}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => setLineup(lineup.filter(lp => lp.athlete_id !== p.athlete_id))} className="p-1.5 text-slate-300 hover:text-red-500">
+                                                <Icon name="x" size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {lineup.length === 0 && (
+                                        <div className="py-12 border-2 border-dashed border-slate-100 rounded-xl flex items-center justify-center text-slate-300 font-bold text-[9px] uppercase tracking-widest">
+                                            No players selected
+                                        </div>
+                                    )}
+                                </div>
+
+                                {lineupStats && (
+                                    <div className="mt-8 pt-6 border-t border-slate-50">
+                                        <div className="flex justify-between items-end mb-3">
+                                            <span className="text-[10px] font-black text-slate-400 uppercase">Aggregate Salary</span>
+                                            <div className="text-right">
+                                                <div className={`text-sm font-black ${lineupStats.totalSalary > SALARY_CAP ? 'text-red-500' : 'text-slate-950'}`}>
+                                                    ${lineupStats.totalSalary.toLocaleString()}
+                                                </div>
+                                                <div className="text-[9px] font-bold text-slate-400 uppercase">Cap: ${SALARY_CAP.toLocaleString()}</div>
+                                            </div>
+                                        </div>
+                                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                            <div className={`h-full transition-all duration-700 ${lineupStats.totalSalary > SALARY_CAP ? 'bg-red-500' : 'bg-slate-950'}`} style={{ width: `${Math.min((lineupStats.totalSalary / SALARY_CAP) * 100, 100)}%` }} />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="bg-slate-950 rounded-3xl p-8 shadow-2xl text-white">
+                                <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-8 flex items-center gap-2">
+                                    <Icon name="activity" className="text-orange-500" size={14} /> Performance Profiling
+                                </h2>
+                                {!lineupStats ? (
+                                    <div className="py-10 text-center text-slate-700">
+                                        <Icon name="chart" className="mx-auto mb-3 opacity-20" size={28} />
+                                        <p className="text-[10px] font-black uppercase">Awaiting selection</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-6">
+                                        <StatRow label="Offensive Efficiency" value={lineupStats.avgTs} />
+                                        <StatRow label="Playmaking Index" value={lineupStats.avgAst} />
+                                        <StatRow label="Defensive Intensity" value={lineupStats.avgDef} />
+                                        <div className="grid grid-cols-2 gap-3 mt-8">
+                                            <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                                <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Usage Meta</div>
+                                                <div className="text-xs font-bold">{lineupStats.avgUsage > 0.70 ? 'Volume Heavy' : 'Optimized'}</div>
+                                            </div>
+                                            <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                                <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Profile</div>
+                                                <div className="text-xs font-bold">{lineupStats.avgDef > 0.7 ? 'Lockdown' : 'Balanced'}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </main>
+
+                    {showImport && (
+                        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 z-50">
+                            <div className="bg-white rounded-[2rem] max-w-xl w-full p-10 shadow-2xl">
+                                <div className="flex justify-between items-center mb-8">
+                                    <div>
+                                        <h3 className="text-xl font-black text-slate-950 uppercase tracking-tight">Import Lab</h3>
+                                        <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">Local CSV Processing</p>
+                                    </div>
+                                    <button onClick={() => setShowImport(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                        <Icon name="x" size={20} />
+                                    </button>
+                                </div>
+                                <textarea 
+                                    className="w-full h-64 bg-slate-50 border border-slate-100 rounded-2xl p-6 font-mono text-[10px] text-slate-600 focus:outline-none focus:bg-white resize-none mb-6"
+                                    placeholder='Paste CSV data here. Headers required: athlete name, team, position, salary_2025_num, ts_pctile_pos, def_efg_pctile_pos'
+                                    value={csvText}
+                                    onChange={(e) => setCsvText(e.target.value)}
+                                />
+                                <div className="flex gap-3">
+                                    <button onClick={handleImport} className="flex-1 bg-slate-950 text-white font-black py-4 rounded-xl uppercase tracking-widest text-[10px]">Build Roster Pool</button>
+                                    <button onClick={() => setShowImport(false)} className="px-8 bg-slate-100 text-slate-500 font-black py-4 rounded-xl uppercase tracking-widest text-[10px]">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const PercentBadge = ({ value }) => {
+            const pct = Math.round((value || 0) * 100);
+            let colorClass = "bg-slate-50 text-slate-400";
+            if (pct >= 90) colorClass = "bg-slate-950 text-white";
+            else if (pct >= 70) colorClass = "bg-slate-200 text-slate-700";
+            return <div className={`inline-block px-2 py-1 rounded-md text-[9px] font-black min-w-[32px] ${colorClass}`}>{pct}</div>;
+        };
+
+        const StatRow = ({ label, value }) => {
+            const displayVal = Math.round((value || 0) * 100);
+            return (
+                <div className="space-y-2">
+                    <div className="flex justify-between items-center text-[9px] font-black uppercase tracking-widest">
+                        <span className="text-slate-500">{label}</span>
+                        <span className="text-white">{displayVal}%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-white transition-all duration-1000 ease-out" style={{ width: `${displayVal}%` }} />
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
